@@ -10,8 +10,8 @@ data class SyncState(val running: Boolean = false, val message: String = "", val
 class FreshLeafRepository(
     private val database: AppDatabase,
     private val credentials: SecureCredentials,
+    private val api: FreshRssApi = FreshRssApi(),
 ) {
-    private val api = FreshRssApi()
     private val _syncState = MutableStateFlow(SyncState())
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
 

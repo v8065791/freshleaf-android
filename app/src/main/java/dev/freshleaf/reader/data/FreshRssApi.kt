@@ -1,5 +1,8 @@
 package dev.freshleaf.reader.data
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -9,11 +12,13 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Dns
 import okhttp3.FormBody
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.net.InetAddress
 
 class FreshRssException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
@@ -28,6 +33,8 @@ class FreshRssApi(
     private val http: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
+    constructor(context: Context) : this(http = networkAwareHttpClient(context))
+
     private var endpoint: String = ""
     private var username: String = ""
     private var auth: String? = null
@@ -219,4 +226,29 @@ class FreshRssApi(
             tagIds = labels.filter { it.contains("/label/") }.joinToString("\u001f"),
         )
     }
+}
+
+private fun networkAwareHttpClient(context: Context): OkHttpClient {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    return OkHttpClient.Builder()
+        .dns(object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> {
+                val networks = runCatching { connectivity.allNetworks.toList() }.getOrDefault(emptyList())
+                    .sortedByDescending { network ->
+                        runCatching {
+                            connectivity.getNetworkCapabilities(network)
+                                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                        }.getOrDefault(false)
+                    }
+                val resolved = networks.asSequence()
+                    .flatMap { network ->
+                        runCatching { network.getAllByName(hostname).asSequence() }
+                            .getOrDefault(emptySequence())
+                    }
+                    .distinctBy { it.hostAddress }
+                    .toList()
+                return resolved.ifEmpty { Dns.SYSTEM.lookup(hostname) }
+            }
+        })
+        .build()
 }
