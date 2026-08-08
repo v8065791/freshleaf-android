@@ -61,6 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,6 +70,8 @@ import dev.freshleaf.reader.data.CategoryEntity
 import dev.freshleaf.reader.data.FeedEntity
 import dev.freshleaf.reader.data.LocalFolderEntity
 import dev.freshleaf.reader.data.TagEntity
+import dev.freshleaf.reader.data.TAILSCALE_PACKAGE
+import dev.freshleaf.reader.data.isTailscaleEndpoint
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -81,11 +84,15 @@ fun FreshLeafScreen(viewModel: FreshLeafViewModel) {
 
 @Composable
 private fun SetupScreen(viewModel: FreshLeafViewModel) {
+    val context = LocalContext.current
     var endpoint by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     val sync by viewModel.syncState.collectAsState()
     val error by viewModel.operationError.collectAsState()
+    val tailscaleIntent = remember(context) {
+        context.packageManager.getLaunchIntentForPackage(TAILSCALE_PACKAGE)
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState()),
@@ -97,6 +104,11 @@ private fun SetupScreen(viewModel: FreshLeafViewModel) {
         OutlinedTextField(endpoint, { endpoint = it }, label = { Text("FreshRSS URL") }, placeholder = { Text("https://rss.example.net") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(username, { username = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(password, { password = it }, label = { Text("API password") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        if (isTailscaleEndpoint(endpoint)) {
+            TailscaleSetupNotice(tailscaleIntent != null) {
+                tailscaleIntent?.let(context::startActivity)
+            }
+        }
         Spacer(Modifier.height(16.dp))
         Button(
             onClick = { viewModel.configure(endpoint, username, password) },
@@ -106,6 +118,18 @@ private fun SetupScreen(viewModel: FreshLeafViewModel) {
         if (sync.running) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 12.dp))
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp)) }
         Text("Use the dedicated API password configured in FreshRSS, not your normal login password.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 20.dp))
+    }
+}
+
+@Composable
+private fun TailscaleSetupNotice(tailscaleInstalled: Boolean, openTailscale: () -> Unit) {
+    Text(
+        "This .ts.net server uses Tailscale. Connect Tailscale first, and make sure FreshLeaf is not excluded by app-based split tunneling.",
+        style = MaterialTheme.typography.bodySmall,
+        modifier = Modifier.padding(top = 12.dp),
+    )
+    if (tailscaleInstalled) {
+        TextButton(onClick = openTailscale) { Text("Open Tailscale") }
     }
 }
 
