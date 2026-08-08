@@ -4,8 +4,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 data class SyncState(val running: Boolean = false, val message: String = "", val error: String? = null)
+data class FolderSources(val feedIds: List<String> = emptyList(), val categoryIds: List<String> = emptyList())
 
 class FreshLeafRepository(
     private val database: AppDatabase,
@@ -22,6 +26,24 @@ class FreshLeafRepository(
 
     fun articles(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null): Flow<List<ArticleEntity>> = database.articles().observe(filter, feedId, categoryId, tagId)
     fun article(id: String): Flow<ArticleEntity?> = database.articles().observeOne(id)
+
+    fun folderSources(folderId: Long): Flow<FolderSources> = combine(
+        database.folders().observeFeedIds(folderId),
+        database.folders().observeCategoryIds(folderId),
+    ) { feedIds, categoryIds -> FolderSources(feedIds, categoryIds) }
+
+    fun folderArticles(filter: String, folderIds: List<Long>): Flow<List<ArticleEntity>> = combine(
+        database.articles().observeAllCached(),
+        database.feeds().observeAll(),
+        database.folders().observeFeedIds(folderIds),
+        database.folders().observeCategoryIds(folderIds),
+    ) { articles, feeds, folderFeedIds, folderCategoryIds ->
+        val feedCategories = feeds.associate { it.id to it.categoryIds }
+        articles.filter { article ->
+            (filter == "all" || filter == "unread" && !article.isRead || filter == "starred" && article.isStarred) &&
+                (article.feedId in folderFeedIds || folderCategoryIds.any { category -> containsRemoteLabel(feedCategories[article.feedId].orEmpty(), category) })
+        }
+    }
 
     fun settings(): AccountSettings? = credentials.load()
 
@@ -73,6 +95,10 @@ class FreshLeafRepository(
         database.folders().addCategory(FolderCategoryCrossRef(folderId, categoryId))
     }
 
+    suspend fun replaceFolderSources(folderId: Long, feedIds: List<String>, categoryIds: List<String>) {
+        database.folders().replaceSources(folderId, feedIds, categoryIds)
+    }
+
     suspend fun subscribe(url: String, title: String, categoryId: String?) {
         api.loginFromStored(credentials)
         api.subscribe(url, title, categoryId)
@@ -85,7 +111,10 @@ class FreshLeafRepository(
         sync()
     }
 
-    suspend fun clearAccount() = credentials.clear()
+    suspend fun clearAccount() = withContext(Dispatchers.IO) {
+        credentials.clear()
+        database.clearAllTables()
+    }
 
     private suspend fun FreshRssApi.loginFromStored(store: SecureCredentials) {
         val account = store.load() ?: throw FreshRssException("Configure a FreshRSS account first")

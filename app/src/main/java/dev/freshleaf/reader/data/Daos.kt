@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -48,6 +49,8 @@ interface TagDao {
 
 @Dao
 interface ArticleDao {
+    @Query("SELECT * FROM articles ORDER BY publishedAt DESC")
+    fun observeAllCached(): Flow<List<ArticleEntity>>
     @Query(
         """
         SELECT * FROM articles
@@ -96,6 +99,26 @@ interface LocalFolderDao {
     @Query("SELECT feedId FROM folder_feeds WHERE folderId = :folderId")
     fun observeFeedIds(folderId: Long): Flow<List<String>>
 
+    @Query("SELECT feedId FROM folder_feeds WHERE folderId IN (:folderIds)")
+    fun observeFeedIds(folderIds: List<Long>): Flow<List<String>>
+
     @Query("SELECT categoryId FROM folder_categories WHERE folderId = :folderId")
     fun observeCategoryIds(folderId: Long): Flow<List<String>>
+
+    @Query("SELECT categoryId FROM folder_categories WHERE folderId IN (:folderIds)")
+    fun observeCategoryIds(folderIds: List<Long>): Flow<List<String>>
+
+    @Query("DELETE FROM folder_feeds WHERE folderId = :folderId")
+    suspend fun clearFeeds(folderId: Long)
+
+    @Query("DELETE FROM folder_categories WHERE folderId = :folderId")
+    suspend fun clearCategories(folderId: Long)
+
+    @Transaction
+    suspend fun replaceSources(folderId: Long, feedIds: List<String>, categoryIds: List<String>) {
+        clearFeeds(folderId)
+        clearCategories(folderId)
+        feedIds.forEach { addFeed(FolderFeedCrossRef(folderId, it)) }
+        categoryIds.forEach { addCategory(FolderCategoryCrossRef(folderId, it)) }
+    }
 }

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -45,11 +46,16 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -149,6 +155,13 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
     var showFolderDialog by remember { mutableStateOf(false) }
     var showFeedDialog by remember { mutableStateOf(false) }
     var showTagDialog by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    val snackbarHost = remember { SnackbarHostState() }
+
+    if (showSettings) {
+        SettingsScreen(viewModel, onBack = { showSettings = false })
+        return
+    }
 
     selectedArticle?.let { article ->
         ArticleDetail(article, viewModel)
@@ -169,7 +182,7 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
                 Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 tags.forEach { tag -> DrawerAction(tag.title, Icons.Default.Label, false) { viewModel.chooseTag(tag.id); scope.launch { drawerState.close() } } }
                 Text("Local folders", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-                folders.forEach { folder -> DrawerAction(folder.name, if (folder.parentId == null) Icons.Default.Folder else Icons.Default.FolderOpen, false) { scope.launch { drawerState.close() } } }
+                FolderDrawerTree(folders) { folder -> viewModel.chooseFolder(folder.id); scope.launch { drawerState.close() } }
                 Divider(Modifier.padding(vertical = 8.dp))
                 TextButton(onClick = { showFolderDialog = true }) { Icon(Icons.Default.CreateNewFolder, null); Text("New local folder", Modifier.padding(start = 8.dp)) }
                 TextButton(onClick = { showFeedDialog = true }) { Icon(Icons.Default.Add, null); Text("Subscribe to feed", Modifier.padding(start = 8.dp)) }
@@ -184,17 +197,18 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
                     navigationIcon = { IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "Menu") } },
                     actions = {
                         IconButton(onClick = viewModel::sync) { Icon(Icons.Default.Refresh, "Sync") }
-                        IconButton(onClick = { showFolderDialog = true }) { Icon(Icons.Default.Settings, "Settings") }
+                        IconButton(onClick = { showSettings = true }) { Icon(Icons.Default.Settings, "Settings") }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(),
                 )
             },
+            snackbarHost = { SnackbarHost(snackbarHost) },
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 if (sync.running) LinearProgressIndicator(Modifier.fillMaxWidth())
                 sync.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp)) }
                 if (articles.isEmpty()) EmptyState(sync.message.ifBlank { "No articles cached yet." })
-                else LazyColumn(Modifier.fillMaxSize()) { items(articles, key = { it.id }) { ArticleCard(it, feeds, viewModel) } }
+                else LazyColumn(Modifier.fillMaxSize()) { items(articles, key = { it.id }) { ArticleCard(it, feeds, viewModel) { message -> scope.launch { snackbarHost.showSnackbar(message) } } } }
             }
         }
     }
@@ -216,8 +230,134 @@ private fun DrawerAction(label: String, icon: androidx.compose.ui.graphics.vecto
 }
 
 @Composable
-private fun ArticleCard(article: ArticleEntity, feeds: List<FeedEntity>, viewModel: FreshLeafViewModel) {
+private fun FolderDrawerTree(folders: List<LocalFolderEntity>, onOpen: (LocalFolderEntity) -> Unit) {
+    @Composable
+    fun draw(parentId: Long?, depth: Int) {
+        folders.filter { it.parentId == parentId }.forEach { folder ->
+            DrawerAction("${"  ".repeat(depth)}${folder.name}", if (folder.parentId == null) Icons.Default.Folder else Icons.Default.FolderOpen, false) { onOpen(folder) }
+            draw(folder.id, depth + 1)
+        }
+    }
+    draw(null, 0)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
+    val account by viewModel.account.collectAsState()
+    val folders by viewModel.folders.collectAsState()
+    val feeds by viewModel.feeds.collectAsState()
+    val categories by viewModel.categories.collectAsState()
+    var accountEditor by remember { mutableStateOf(false) }
+    var resetConfirmation by remember { mutableStateOf(false) }
+    var parentForNewFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
+    var sourceFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
+
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Settings") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } },
+        )
+    }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            item {
+                Text("Account", style = MaterialTheme.typography.titleMedium)
+                account?.let {
+                    Text(it.endpoint, style = MaterialTheme.typography.bodyMedium)
+                    Text(it.username, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { accountEditor = true }) { Text("Edit account") }
+                    TextButton(onClick = { resetConfirmation = true }) { Text("Reset account") }
+                }
+                Divider(Modifier.padding(vertical = 12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("Local folders", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { parentForNewFolder = LocalFolderEntity(name = "") }) { Text("New folder") }
+                }
+            }
+            fun draw(parentId: Long?, depth: Int) {
+                folders.filter { it.parentId == parentId }.forEach { folder ->
+                    item(key = folder.id) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(start = (depth * 20).dp)) {
+                            Icon(if (folder.parentId == null) Icons.Default.Folder else Icons.Default.FolderOpen, null)
+                            TextButton(onClick = { sourceFolder = folder }, modifier = Modifier.weight(1f)) { Text(folder.name) }
+                            TextButton(onClick = { parentForNewFolder = folder }) { Text("Add subfolder") }
+                        }
+                    }
+                    draw(folder.id, depth + 1)
+                }
+            }
+            draw(null, 0)
+        }
+    }
+
+    if (accountEditor && account != null) AccountDialog(account!!, { accountEditor = false }) { endpoint, username, password ->
+        viewModel.configure(endpoint, username, password)
+        accountEditor = false
+    }
+    if (parentForNewFolder != null) NameDialog(
+        if (parentForNewFolder!!.id == 0L) "New local folder" else "New subfolder in ${parentForNewFolder!!.name}",
+        "Folder name",
+        { parentForNewFolder = null },
+    ) { name ->
+        viewModel.createFolder(name, parentForNewFolder!!.id.takeIf { it != 0L })
+        parentForNewFolder = null
+    }
+    sourceFolder?.let { folder -> FolderSourcesDialog(folder, feeds, categories, viewModel, { sourceFolder = null }) }
+    if (resetConfirmation) AlertDialog(
+        onDismissRequest = { resetConfirmation = false },
+        title = { Text("Reset account?") },
+        text = { Text("This removes your credentials, cached FreshRSS data, and local folders from this device.") },
+        confirmButton = { TextButton(onClick = { viewModel.resetAccount(); resetConfirmation = false; onBack() }) { Text("Reset") } },
+        dismissButton = { TextButton(onClick = { resetConfirmation = false }) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AccountDialog(account: dev.freshleaf.reader.data.AccountSettings, onDismiss: () -> Unit, onSave: (String, String, String) -> Unit) {
+    var endpoint by remember { mutableStateOf(account.endpoint) }
+    var username by remember { mutableStateOf(account.username) }
+    var password by remember { mutableStateOf(account.password) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text("Edit account") }, text = {
+        Column {
+            OutlinedTextField(endpoint, { endpoint = it }, label = { Text("FreshRSS URL") }, singleLine = true)
+            OutlinedTextField(username, { username = it }, label = { Text("Username") }, singleLine = true)
+            OutlinedTextField(password, { password = it }, label = { Text("API password") }, singleLine = true)
+        }
+    }, confirmButton = { TextButton(enabled = endpoint.isNotBlank() && username.isNotBlank() && password.isNotBlank(), onClick = { onSave(endpoint, username, password) }) { Text("Save") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun FolderSourcesDialog(folder: LocalFolderEntity, feeds: List<FeedEntity>, categories: List<CategoryEntity>, viewModel: FreshLeafViewModel, onDismiss: () -> Unit) {
+    val sources by viewModel.folderSources(folder.id).collectAsState(initial = dev.freshleaf.reader.data.FolderSources())
+    var feedIds by remember { mutableStateOf(emptySet<String>()) }
+    var categoryIds by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(sources) { feedIds = sources.feedIds.toSet(); categoryIds = sources.categoryIds.toSet() }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(folder.name) }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("Feeds", style = MaterialTheme.typography.labelLarge)
+            feeds.forEach { feed -> Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(feed.id in feedIds, { checked -> feedIds = if (checked) feedIds + feed.id else feedIds - feed.id }); Text(feed.title) } }
+            Text("Categories", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp))
+            categories.forEach { category -> Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(category.id in categoryIds, { checked -> categoryIds = if (checked) categoryIds + category.id else categoryIds - category.id }); Text(category.title) } }
+        }
+    }, confirmButton = { TextButton(onClick = { viewModel.replaceFolderSources(folder.id, dev.freshleaf.reader.data.FolderSources(feedIds.toList(), categoryIds.toList())); onDismiss() }) { Text("Save") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArticleCard(article: ArticleEntity, feeds: List<FeedEntity>, viewModel: FreshLeafViewModel, onMessage: (String) -> Unit) {
     val feedName = feeds.firstOrNull { it.id == article.feedId }?.title ?: "FreshRSS"
+    val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
+        when (value) {
+            SwipeToDismissBoxValue.StartToEnd -> { viewModel.toggleRead(article); onMessage(if (article.isRead) "Marked unread" else "Marked read") }
+            SwipeToDismissBoxValue.EndToStart -> { viewModel.toggleStar(article); onMessage(if (article.isStarred) "Removed star" else "Starred") }
+            SwipeToDismissBoxValue.Settled -> Unit
+        }
+        false
+    })
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = { Box(Modifier.fillMaxSize().padding(horizontal = 24.dp), contentAlignment = Alignment.CenterStart) { Text("Mark read / unread") } },
+        content = {
     Card(onClick = { viewModel.openArticle(article) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -230,6 +370,8 @@ private fun ArticleCard(article: ArticleEntity, feeds: List<FeedEntity>, viewMod
             Text(formatDate(article.publishedAt), style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 8.dp))
         }
     }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

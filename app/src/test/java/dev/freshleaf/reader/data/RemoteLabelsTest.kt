@@ -7,6 +7,17 @@ import org.junit.Test
 
 class RemoteLabelsTest {
     @Test
+    fun folderDescendantsIncludeNestedSubfolders() {
+        val folders = listOf(
+            LocalFolderEntity(id = 1, name = "Root"),
+            LocalFolderEntity(id = 2, name = "Child", parentId = 1),
+            LocalFolderEntity(id = 3, name = "Grandchild", parentId = 2),
+            LocalFolderEntity(id = 4, name = "Elsewhere"),
+        )
+        assertEquals(listOf(1L, 2L, 3L), dev.freshleaf.reader.ui.descendantFolderIds(1, folders))
+    }
+
+    @Test
     fun endpointWithoutApiPathGetsReaderApiPath() {
         assertEquals("https://rss.example/api/greader.php", normalizeFreshRssEndpoint("https://rss.example/"))
     }
@@ -23,4 +34,3 @@ class RemoteLabelsTest {
         assertFalse(containsRemoteLabel(labels, "user/u/label/and"))
     }
 }
-

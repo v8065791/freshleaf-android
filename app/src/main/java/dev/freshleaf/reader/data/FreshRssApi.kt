@@ -45,10 +45,14 @@ class FreshRssApi(
 
     suspend fun sync(): FreshRssSnapshot {
         requireLoggedIn()
-        val tagsJson = getJson("tag/list")
-        val subscriptionsJson = getJson("subscription/list")
-        val unreadJson = getJson("unread-count")
-        val itemsJson = getJson("stream/contents/reading-list", mapOf("n" to "200", "output" to "json"))
+        val jsonOutput = mapOf("output" to "json")
+        val tagsJson = getJson("tag/list", jsonOutput)
+        val subscriptionsJson = getJson("subscription/list", jsonOutput)
+        val unreadJson = getJson("unread-count", jsonOutput)
+        val itemsJson = getJson(
+            "stream/contents/user/-/state/com.google/reading-list",
+            jsonOutput + ("n" to "200"),
+        )
 
         val unreadCounts = unreadJson["unreadcounts"]?.jsonArray.orEmpty().associate {
             it.jsonObject.string("id") to it.jsonObject.int("count")
@@ -144,7 +148,7 @@ class FreshRssApi(
         try {
             http.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw FreshRssException("FreshRSS HTTP ${response.code}: ${body.take(200)}")
+                if (!response.isSuccessful) throw FreshRssException("FreshRSS HTTP ${response.code} at ${request.url.encodedPath}: ${body.take(200)}")
                 body
             }
         } catch (e: FreshRssException) {
