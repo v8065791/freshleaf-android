@@ -2,9 +2,9 @@ package dev.freshleaf.reader.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
 
 class TailscaleNetworkTest {
     @Test fun classifiesMagicDnsHostsCaseInsensitively() {
@@ -13,22 +13,20 @@ class TailscaleNetworkTest {
         assertFalse(isTailscaleHostname("rss.example.net"))
     }
 
-    @Test fun normalHostsKeepTheSystemClient() {
-        assertEquals(EndpointNetworkMode.SYSTEM, endpointNetworkMode("rss.example.net"))
+    @Test fun normalHostsDoNotUseTailscaleHandling() {
         assertFalse(isTailscaleEndpoint("https://rss.example.net"))
     }
 
-    @Test fun selectsTheFirstActiveVpnThatCanResolveTheMagicDnsHost() {
-        val selected = selectResolvingVpn("helios.tail5460cf.ts.net", listOf(
-            VpnNetworkCandidate("wifi", false), VpnNetworkCandidate("unrelated-vpn", true), VpnNetworkCandidate("tailscale", true),
-        )) { network, _ -> if (network == "tailscale") listOf("100.64.0.10") else emptyList() }
-        assertEquals("tailscale", selected)
+    @Test fun turnsAnActualMagicDnsFailureIntoActionableTailscaleGuidance() {
+        val failure = connectionFailure("helios.tail5460cf.ts.net", IOException("host not found"))
+        assertTrue(failure is TailscaleConnectionException)
+        assertTrue(failure.message!!.contains("app-based split tunneling"))
     }
 
-    @Test fun noResolvingVpnProducesNoCandidate() {
-        val selected = selectResolvingVpn("helios.tail5460cf.ts.net", listOf(VpnNetworkCandidate("wifi", false))) { _, _ -> emptyList<String>() }
-        assertNull(selected)
-        assertTrue(TailscaleConnectionException().message!!.contains("app-based split tunneling"))
+    @Test fun keepsNormalHostNetworkFailuresGeneric() {
+        val failure = connectionFailure("rss.example.net", IOException("host not found"))
+        assertFalse(failure is TailscaleConnectionException)
+        assertTrue(failure.message!!.startsWith("Unable to reach FreshRSS:"))
     }
 
     @Test fun keepsClientLoginSeparateFromAuthenticatedApiRoutes() {

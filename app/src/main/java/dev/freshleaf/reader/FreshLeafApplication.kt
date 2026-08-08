@@ -10,7 +10,7 @@ import dev.freshleaf.reader.data.SyncScheduler
 
 class FreshLeafApplication : Application(), FreshLeafApplicationAccessor {
     override val repository: FreshLeafRepository by lazy {
-        FreshLeafRepository(AppDatabase.create(this), SecureCredentials(this), FreshRssApi(this))
+        FreshLeafRepository(AppDatabase.create(this), SecureCredentials(this), FreshRssApi())
     }
 
     override fun onCreate() {

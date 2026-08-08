@@ -1,6 +1,5 @@
 package dev.freshleaf.reader.data
 
-import android.content.Context
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -11,7 +10,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
@@ -26,21 +24,16 @@ data class FreshRssSnapshot(
 )
 
 class FreshRssApi(
-    private val clientFactory: EndpointHttpClientFactory = FixedEndpointHttpClientFactory(OkHttpClient()),
+    private val http: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    constructor(context: Context) : this(clientFactory = AndroidEndpointHttpClientFactory(context))
-    constructor(http: OkHttpClient, json: Json = Json { ignoreUnknownKeys = true }) : this(FixedEndpointHttpClientFactory(http), json)
-
     private var endpoint: String = ""
-    private var http: OkHttpClient = OkHttpClient()
     private var username: String = ""
     private var auth: String? = null
     private var token: String? = null
 
     suspend fun login(endpoint: String, username: String, password: String) {
         this.endpoint = normalizeEndpoint(endpoint)
-        http = clientFactory.clientFor(this.endpoint.toHttpUrl())
         this.username = username
         val response = postRaw("accounts/ClientLogin", mapOf("Email" to username, "Passwd" to password))
         val authLine = response.lineSequence().firstOrNull { it.startsWith("Auth=") }
@@ -157,8 +150,7 @@ class FreshRssApi(
         } catch (e: FreshRssException) {
             throw e
         } catch (e: IOException) {
-            val detail = e.message?.takeIf { it.isNotBlank() } ?: e::class.simpleName.orEmpty()
-            throw FreshRssException("Unable to reach FreshRSS: $detail", e)
+            throw connectionFailure(request.url.host, e)
         }
     }
 

@@ -12,7 +12,7 @@ FreshLeaf is an Android RSS reader for FreshRSS. It uses FreshRSS's Google Reade
 
 For a FreshRSS server with a `.ts.net` name, install and connect the official Android Tailscale app before signing in. FreshLeaf uses that existing VPN; it does not embed Tailscale or create another VPN connection.
 
-MagicDNS lookups and HTTPS sockets are bound to the active Android VPN, so both go through the same Tailscale tunnel. In Tailscale's app-based split-tunneling settings, ensure **FreshLeaf** is not excluded. The FreshLeaf account screen offers **Open Tailscale** when the app is installed.
+Android routes FreshLeaf's DNS and HTTPS traffic through Tailscale when the app is included in Tailscale's app-based split-tunneling policy. Ensure **FreshLeaf** is not excluded. The FreshLeaf account screen offers **Open Tailscale** when the app is installed.
 
 FreshLeaf accepts HTTPS endpoints only. System and user-installed certificate authorities remain trusted, which supports private PKI deployments without weakening HTTPS.
 
