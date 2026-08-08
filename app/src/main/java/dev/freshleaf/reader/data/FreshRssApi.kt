@@ -138,7 +138,7 @@ class FreshRssApi(
 
     private suspend fun postRaw(path: String, fields: Map<String, String>): String {
         val form = FormBody.Builder().apply { fields.forEach { (key, value) -> add(key, value) } }.build()
-        return execute(Request.Builder().url(url(path)).post(form).build())
+        return execute(Request.Builder().url(endpointUrl(path)).post(form).build())
     }
 
     private suspend fun execute(request: Request): String = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -151,13 +151,16 @@ class FreshRssApi(
         } catch (e: FreshRssException) {
             throw e
         } catch (e: IOException) {
-            throw FreshRssException("Unable to reach FreshRSS", e)
+            val detail = e.message?.takeIf { it.isNotBlank() } ?: e::class.simpleName.orEmpty()
+            throw FreshRssException("Unable to reach FreshRSS: $detail", e)
         }
     }
 
     private fun Request.Builder.authorized(): Request.Builder = apply {
         auth?.let { header("Authorization", "GoogleLogin auth=$it") }
     }
+
+    private fun endpointUrl(path: String) = "$endpoint/$path".toHttpUrl()
 
     private fun url(path: String) = "$endpoint/reader/api/0/$path".toHttpUrl()
 
