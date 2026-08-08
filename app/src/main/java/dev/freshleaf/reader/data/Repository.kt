@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 
 data class SyncState(val running: Boolean = false, val message: String = "", val error: String? = null)
 data class FolderSources(val feedIds: List<String> = emptyList(), val categoryIds: List<String> = emptyList())
+data class FeedOrganization(val localTagIds: List<Long> = emptyList(), val folderIds: List<Long> = emptyList())
 
 class FreshLeafRepository(
     private val database: AppDatabase,
@@ -22,15 +23,22 @@ class FreshLeafRepository(
     val feeds = database.feeds().observeAll()
     val categories = database.categories().observeAll()
     val tags = database.tags().observeAll()
+    val localFeedTags = database.localFeedTags().observeAll()
     val folders = database.folders().observeAll()
 
-    fun articles(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null): Flow<List<ArticleEntity>> = database.articles().observe(filter, feedId, categoryId, tagId)
+    fun articles(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null, localFeedTagId: Long? = null): Flow<List<ArticleEntity>> =
+        database.articles().observe(filter, feedId, categoryId, tagId, localFeedTagId)
     fun article(id: String): Flow<ArticleEntity?> = database.articles().observeOne(id)
 
     fun folderSources(folderId: Long): Flow<FolderSources> = combine(
         database.folders().observeFeedIds(folderId),
         database.folders().observeCategoryIds(folderId),
     ) { feedIds, categoryIds -> FolderSources(feedIds, categoryIds) }
+
+    fun feedOrganization(feedId: String): Flow<FeedOrganization> = combine(
+        database.localFeedTags().observeTagIdsForFeed(feedId),
+        database.folders().observeFolderIdsForFeed(feedId),
+    ) { localTagIds, folderIds -> FeedOrganization(localTagIds, folderIds) }
 
     fun folderArticles(filter: String, folderIds: List<Long>): Flow<List<ArticleEntity>> = combine(
         database.articles().observeAllCached(),
@@ -99,6 +107,49 @@ class FreshLeafRepository(
         database.folders().replaceSources(folderId, feedIds, categoryIds)
     }
 
+    suspend fun saveFeedOrganization(
+        feed: FeedEntity,
+        categoryIds: List<String>,
+        localTagIds: List<Long>,
+        folderIds: List<Long>,
+    ) {
+        val currentCategories = remoteIds(feed.categoryIds)
+        val selectedCategories = categoryIds.toSet()
+        if (currentCategories != selectedCategories) {
+            api.loginFromStored(credentials)
+            api.updateSubscriptionCategories(feed.id, currentCategories, selectedCategories)
+            // Keep the local selection accurate even if a subsequent full sync is unavailable.
+            database.feeds().upsertAll(listOf(feed.copy(categoryIds = selectedCategories.sorted().joinToString(REMOTE_ID_SEPARATOR))))
+        }
+        database.localFeedTags().replaceFeedTags(feed.id, localTagIds)
+        database.folders().replaceFoldersForFeed(feed.id, folderIds)
+        if (currentCategories != selectedCategories) sync()
+    }
+
+    suspend fun createCategoryForFeed(feed: FeedEntity, label: String) {
+        api.loginFromStored(credentials)
+        val categoryId = api.createCategoryAndAssign(feed.id, label)
+        val updatedIds = remoteIds(feed.categoryIds) + categoryId
+        database.feeds().upsertAll(listOf(feed.copy(categoryIds = updatedIds.sorted().joinToString(REMOTE_ID_SEPARATOR))))
+        sync()
+    }
+
+    suspend fun createLocalFeedTag(name: String) {
+        val cleaned = name.trim()
+        require(cleaned.isNotBlank()) { "Label name cannot be blank" }
+        database.localFeedTags().insert(LocalFeedTagEntity(name = cleaned))
+    }
+
+    suspend fun renameLocalFeedTag(id: Long, name: String) {
+        val cleaned = name.trim()
+        require(cleaned.isNotBlank()) { "Label name cannot be blank" }
+        database.localFeedTags().rename(id, cleaned)
+    }
+
+    suspend fun deleteLocalFeedTag(id: Long) {
+        database.localFeedTags().delete(id)
+    }
+
     suspend fun subscribe(url: String, title: String, categoryId: String?) {
         api.loginFromStored(credentials)
         api.subscribe(url, title, categoryId)
@@ -120,4 +171,8 @@ class FreshLeafRepository(
         val account = store.load() ?: throw FreshRssException("Configure a FreshRSS account first")
         login(account.endpoint, account.username, account.password)
     }
+
+    private fun remoteIds(value: String): Set<String> = value.split(REMOTE_ID_SEPARATOR).filter { it.isNotBlank() }.toSet()
 }
+
+const val REMOTE_ID_SEPARATOR = "\u001f"

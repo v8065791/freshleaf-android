@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dev.freshleaf.reader.data.ArticleEntity
 import dev.freshleaf.reader.data.FreshLeafRepository
 import dev.freshleaf.reader.data.FolderSources
+import dev.freshleaf.reader.data.FeedEntity
 import dev.freshleaf.reader.data.LocalFolderEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +21,7 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
     private val feedId = MutableStateFlow<String?>(null)
     private val categoryId = MutableStateFlow<String?>(null)
     private val tagId = MutableStateFlow<String?>(null)
+    private val localFeedTagId = MutableStateFlow<Long?>(null)
     private val folderId = MutableStateFlow<Long?>(null)
     private val _configured = MutableStateFlow(repository.settings() != null)
     private val _selectedArticle = MutableStateFlow<ArticleEntity?>(null)
@@ -34,16 +36,19 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
     val feeds = repository.feeds.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val categories = repository.categories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val tags = repository.tags.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val localFeedTags = repository.localFeedTags.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val folders = repository.folders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val selectedFilter: StateFlow<String> = filter
     val selectedFeedId: StateFlow<String?> = feedId
-    val articles = combine(filter, feedId, categoryId, tagId, folderId) { currentFilter, currentFeed, currentCategory, currentTag, currentFolder ->
-        BasicArticleSelection(currentFilter, currentFeed, currentCategory, currentTag, currentFolder)
+    val articles = combine(filter, feedId, categoryId, tagId, localFeedTagId) { currentFilter, currentFeed, currentCategory, currentTag, currentLocalFeedTag ->
+        BasicArticleSelection(currentFilter, currentFeed, currentCategory, currentTag, currentLocalFeedTag)
+    }.combine(folderId) { selection, currentFolder ->
+        selection.copy(folderId = currentFolder)
     }.combine(folders) { selection, allFolders ->
-        ArticleSelection(selection.filter, selection.feedId, selection.categoryId, selection.tagId, selection.folderId, allFolders)
+        ArticleSelection(selection.filter, selection.feedId, selection.categoryId, selection.tagId, selection.localFeedTagId, selection.folderId, allFolders)
     }.flatMapLatest { selection ->
         selection.folderId?.let { repository.folderArticles(selection.filter, descendantFolderIds(it, selection.folders)) }
-            ?: repository.articles(selection.filter, selection.feedId, selection.categoryId, selection.tagId)
+            ?: repository.articles(selection.filter, selection.feedId, selection.categoryId, selection.tagId, selection.localFeedTagId)
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -64,6 +69,7 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
         feedId.value = null
         categoryId.value = null
         tagId.value = null
+        localFeedTagId.value = null
         folderId.value = null
         filter.value = value
         _selectedArticle.value = null
@@ -73,6 +79,7 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
         feedId.value = value
         categoryId.value = null
         tagId.value = null
+        localFeedTagId.value = null
         folderId.value = null
         filter.value = "all"
         _selectedArticle.value = null
@@ -82,6 +89,7 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
         feedId.value = null
         categoryId.value = value
         tagId.value = null
+        localFeedTagId.value = null
         folderId.value = null
         filter.value = "all"
         _selectedArticle.value = null
@@ -91,6 +99,17 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
         feedId.value = null
         categoryId.value = null
         tagId.value = value
+        localFeedTagId.value = null
+        folderId.value = null
+        filter.value = "all"
+        _selectedArticle.value = null
+    }
+
+    fun chooseLocalFeedTag(value: Long) {
+        feedId.value = null
+        categoryId.value = null
+        tagId.value = null
+        localFeedTagId.value = value
         folderId.value = null
         filter.value = "all"
         _selectedArticle.value = null
@@ -100,6 +119,7 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
         feedId.value = null
         categoryId.value = null
         tagId.value = null
+        localFeedTagId.value = null
         folderId.value = value
         filter.value = "all"
         _selectedArticle.value = null
@@ -121,6 +141,14 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
     fun createFolder(name: String, parentId: Long? = null) = launchOperation { repository.createFolder(name, parentId) }
     fun folderSources(folderId: Long) = repository.folderSources(folderId)
     fun replaceFolderSources(folderId: Long, sources: FolderSources) = launchOperation { repository.replaceFolderSources(folderId, sources.feedIds, sources.categoryIds) }
+    fun feedOrganization(feedId: String) = repository.feedOrganization(feedId)
+    fun saveFeedOrganization(feed: FeedEntity, categoryIds: List<String>, localTagIds: List<Long>, folderIds: List<Long>) = launchOperation {
+        repository.saveFeedOrganization(feed, categoryIds, localTagIds, folderIds)
+    }
+    fun createCategoryForFeed(feed: FeedEntity, name: String) = launchOperation { repository.createCategoryForFeed(feed, name) }
+    fun createLocalFeedTag(name: String) = launchOperation { repository.createLocalFeedTag(name) }
+    fun renameLocalFeedTag(id: Long, name: String) = launchOperation { repository.renameLocalFeedTag(id, name) }
+    fun deleteLocalFeedTag(id: Long) = launchOperation { repository.deleteLocalFeedTag(id) }
     fun resetAccount() = launchOperation {
         repository.clearAccount()
         _account.value = null
@@ -148,6 +176,7 @@ private data class ArticleSelection(
     val feedId: String?,
     val categoryId: String?,
     val tagId: String?,
+    val localFeedTagId: Long?,
     val folderId: Long?,
     val folders: List<LocalFolderEntity>,
 )
@@ -157,7 +186,8 @@ private data class BasicArticleSelection(
     val feedId: String?,
     val categoryId: String?,
     val tagId: String?,
-    val folderId: Long?,
+    val localFeedTagId: Long?,
+    val folderId: Long? = null,
 )
 
 internal fun descendantFolderIds(rootId: Long, folders: List<LocalFolderEntity>): List<Long> {

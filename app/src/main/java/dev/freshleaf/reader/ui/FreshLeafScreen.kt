@@ -75,6 +75,7 @@ import dev.freshleaf.reader.data.ArticleEntity
 import dev.freshleaf.reader.data.CategoryEntity
 import dev.freshleaf.reader.data.FeedEntity
 import dev.freshleaf.reader.data.LocalFolderEntity
+import dev.freshleaf.reader.data.LocalFeedTagEntity
 import dev.freshleaf.reader.data.TagEntity
 import dev.freshleaf.reader.data.TAILSCALE_PACKAGE
 import dev.freshleaf.reader.data.isTailscaleEndpoint
@@ -148,6 +149,7 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
     val feeds by viewModel.feeds.collectAsState()
     val categories by viewModel.categories.collectAsState()
     val tags by viewModel.tags.collectAsState()
+    val localFeedTags by viewModel.localFeedTags.collectAsState()
     val folders by viewModel.folders.collectAsState()
     val filter by viewModel.selectedFilter.collectAsState()
     val selectedArticle by viewModel.selectedArticle.collectAsState()
@@ -181,6 +183,8 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
                 categories.forEach { category -> DrawerAction(category.title, Icons.Default.Folder, false) { viewModel.chooseCategory(category.id); scope.launch { drawerState.close() } } }
                 Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 tags.forEach { tag -> DrawerAction(tag.title, Icons.Default.Label, false) { viewModel.chooseTag(tag.id); scope.launch { drawerState.close() } } }
+                Text("Feed labels", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                localFeedTags.forEach { tag -> DrawerAction(tag.name, Icons.Default.Label, false) { viewModel.chooseLocalFeedTag(tag.id); scope.launch { drawerState.close() } } }
                 Text("Local folders", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 FolderDrawerTree(folders) { folder -> viewModel.chooseFolder(folder.id); scope.launch { drawerState.close() } }
                 Divider(Modifier.padding(vertical = 8.dp))
@@ -248,10 +252,14 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
     val folders by viewModel.folders.collectAsState()
     val feeds by viewModel.feeds.collectAsState()
     val categories by viewModel.categories.collectAsState()
+    val localFeedTags by viewModel.localFeedTags.collectAsState()
     var accountEditor by remember { mutableStateOf(false) }
     var resetConfirmation by remember { mutableStateOf(false) }
     var parentForNewFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
     var sourceFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
+    var organizationFeed by remember { mutableStateOf<FeedEntity?>(null) }
+    var creatingLocalTag by remember { mutableStateOf(false) }
+    var editingLocalTag by remember { mutableStateOf<LocalFeedTagEntity?>(null) }
 
     Scaffold(topBar = {
         TopAppBar(
@@ -287,6 +295,22 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
                 }
             }
             draw(null, 0)
+            item {
+                Divider(Modifier.padding(vertical = 12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("Feed labels", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { creatingLocalTag = true }) { Text("New label") }
+                }
+                localFeedTags.forEach { tag ->
+                    TextButton(onClick = { editingLocalTag = tag }, modifier = Modifier.fillMaxWidth()) { Text(tag.name) }
+                }
+                Divider(Modifier.padding(vertical = 12.dp))
+                Text("Feeds", style = MaterialTheme.typography.titleMedium)
+                Text("Choose a feed to assign FreshRSS categories, local labels, and local folders.", style = MaterialTheme.typography.bodySmall)
+                feeds.forEach { feed ->
+                    TextButton(onClick = { organizationFeed = feed }, modifier = Modifier.fillMaxWidth()) { Text(feed.title) }
+                }
+            }
         }
     }
 
@@ -303,6 +327,9 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
         parentForNewFolder = null
     }
     sourceFolder?.let { folder -> FolderSourcesDialog(folder, feeds, categories, viewModel, { sourceFolder = null }) }
+    organizationFeed?.let { feed -> FeedOrganizationDialog(feed, categories, localFeedTags, folders, viewModel, { organizationFeed = null }) }
+    if (creatingLocalTag) NameDialog("New local feed label", "Label name", { creatingLocalTag = false }, { name -> viewModel.createLocalFeedTag(name); creatingLocalTag = false })
+    editingLocalTag?.let { tag -> LocalFeedTagDialog(tag, viewModel, { editingLocalTag = null }) }
     if (resetConfirmation) AlertDialog(
         onDismissRequest = { resetConfirmation = false },
         title = { Text("Reset account?") },
@@ -340,6 +367,104 @@ private fun FolderSourcesDialog(folder: LocalFolderEntity, feeds: List<FeedEntit
             categories.forEach { category -> Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(category.id in categoryIds, { checked -> categoryIds = if (checked) categoryIds + category.id else categoryIds - category.id }); Text(category.title) } }
         }
     }, confirmButton = { TextButton(onClick = { viewModel.replaceFolderSources(folder.id, dev.freshleaf.reader.data.FolderSources(feedIds.toList(), categoryIds.toList())); onDismiss() }) { Text("Save") } }, dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } })
+}
+
+@Composable
+private fun FeedOrganizationDialog(
+    feed: FeedEntity,
+    categories: List<CategoryEntity>,
+    localFeedTags: List<LocalFeedTagEntity>,
+    folders: List<LocalFolderEntity>,
+    viewModel: FreshLeafViewModel,
+    onDismiss: () -> Unit,
+) {
+    val organization by viewModel.feedOrganization(feed.id).collectAsState(initial = dev.freshleaf.reader.data.FeedOrganization())
+    var categoryIds by remember(feed.id) { mutableStateOf(remoteIds(feed.categoryIds)) }
+    var localTagIds by remember { mutableStateOf(emptySet<Long>()) }
+    var folderIds by remember { mutableStateOf(emptySet<Long>()) }
+    var newCategory by remember { mutableStateOf(false) }
+    var newLocalTag by remember { mutableStateOf(false) }
+    LaunchedEffect(organization) {
+        localTagIds = organization.localTagIds.toSet()
+        folderIds = organization.folderIds.toSet()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(feed.title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("FreshRSS categories", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { newCategory = true }) { Text("New") }
+                }
+                if (categories.isEmpty()) Text("Create a category or sync your FreshRSS account.", style = MaterialTheme.typography.bodySmall)
+                categories.forEach { category ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(category.id in categoryIds, { checked -> categoryIds = if (checked) categoryIds + category.id else categoryIds - category.id })
+                        Text(category.title)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                    Text("Local feed labels", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { newLocalTag = true }) { Text("New") }
+                }
+                if (localFeedTags.isEmpty()) Text("Local labels stay on this device.", style = MaterialTheme.typography.bodySmall)
+                localFeedTags.forEach { tag ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(tag.id in localTagIds, { checked -> localTagIds = if (checked) localTagIds + tag.id else localTagIds - tag.id })
+                        Text(tag.name)
+                    }
+                }
+                Text("Local folders", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp))
+                if (folders.isEmpty()) Text("Create folders in Settings to assign this feed.", style = MaterialTheme.typography.bodySmall)
+                folders.forEach { folder ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(folder.id in folderIds, { checked -> folderIds = if (checked) folderIds + folder.id else folderIds - folder.id })
+                        Text(folder.name)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                viewModel.saveFeedOrganization(feed, categoryIds.toList(), localTagIds.toList(), folderIds.toList())
+                onDismiss()
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+    if (newCategory) NameDialog("New FreshRSS category", "Category name", { newCategory = false }, { name ->
+        viewModel.createCategoryForFeed(feed, name)
+        newCategory = false
+        // The server has already assigned the new category; reopen with fresh state before editing again.
+        onDismiss()
+    })
+    if (newLocalTag) NameDialog("New local feed label", "Label name", { newLocalTag = false }, { name -> viewModel.createLocalFeedTag(name); newLocalTag = false })
+}
+
+@Composable
+private fun LocalFeedTagDialog(tag: LocalFeedTagEntity, viewModel: FreshLeafViewModel, onDismiss: () -> Unit) {
+    var name by remember(tag.id) { mutableStateOf(tag.name) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit local feed label") },
+        text = { OutlinedTextField(name, { name = it }, label = { Text("Label name") }, singleLine = true) },
+        confirmButton = { TextButton(enabled = name.trim().isNotEmpty(), onClick = { viewModel.renameLocalFeedTag(tag.id, name); onDismiss() }) { Text("Save") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { confirmDelete = true }) { Text("Delete") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+    if (confirmDelete) AlertDialog(
+        onDismissRequest = { confirmDelete = false },
+        title = { Text("Delete ${tag.name}?") },
+        text = { Text("This removes the local label from all feeds. FreshRSS is not changed.") },
+        confirmButton = { TextButton(onClick = { viewModel.deleteLocalFeedTag(tag.id); confirmDelete = false; onDismiss() }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -413,3 +538,4 @@ private fun FeedDialog(onDismiss: () -> Unit, onSave: (String, String) -> Unit) 
 
 private fun stripHtml(value: String): String = value.replace(Regex("<[^>]*>"), "").replace(Regex("\\s+"), " ").trim()
 private fun formatDate(timestamp: Long): String = if (timestamp == 0L) "" else DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(timestamp))
+private fun remoteIds(value: String): Set<String> = value.split('\u001f').filter { it.isNotBlank() }.toSet()

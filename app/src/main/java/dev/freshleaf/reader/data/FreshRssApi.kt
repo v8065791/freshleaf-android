@@ -1,6 +1,7 @@
 package dev.freshleaf.reader.data
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -22,6 +23,11 @@ data class FreshRssSnapshot(
     val tags: List<TagEntity>,
     val articles: List<ArticleEntity>,
 )
+
+internal data class SubscriptionCategoryChanges(val add: Set<String>, val remove: Set<String>)
+
+internal fun subscriptionCategoryChanges(currentIds: Set<String>, selectedIds: Set<String>) =
+    SubscriptionCategoryChanges(add = selectedIds - currentIds, remove = currentIds - selectedIds)
 
 class FreshRssApi(
     private val http: OkHttpClient = OkHttpClient(),
@@ -54,21 +60,20 @@ class FreshRssApi(
             jsonOutput + ("n" to "200"),
         )
 
-        val unreadCounts = unreadJson["unreadcounts"]?.jsonArray.orEmpty().associate {
-            it.jsonObject.string("id") to it.jsonObject.int("count")
+        val unreadCounts = unreadJson["unreadcounts"].asArray().mapNotNull { it as? JsonObject }.associate {
+            it.string("id") to it.int("count")
         }
-        val categoryIds = subscriptionsJson["subscriptions"]?.jsonArray.orEmpty()
-            .flatMap { it.jsonObject["categories"]?.jsonArray.orEmpty().map { c -> c.jsonObject.string("id") } }
+        val subscriptions = subscriptionsJson["subscriptions"].asArray().mapNotNull { it as? JsonObject }
+        val tagObjects = tagsJson["tags"].asArray().mapNotNull { it as? JsonObject }
+        val categoryIds = subscriptions
+            .flatMap { it["categories"].asArray().mapNotNull { c -> (c as? JsonObject)?.stringOrNull("id") } }
             .toSet()
-        val categories = tagsJson["tags"]?.jsonArray.orEmpty()
-            .mapNotNull { it.jsonObject.toCategoryOrNull() }
-        val tags = tagsJson["tags"]?.jsonArray.orEmpty()
-            .mapNotNull { it.jsonObject.toTagOrNull(categoryIds) }
-        val feeds = subscriptionsJson["subscriptions"]?.jsonArray.orEmpty().mapNotNull { value ->
-            val obj = value.jsonObject
+        val categories = tagObjects.mapNotNull { it.toCategoryOrNull() }
+        val tags = tagObjects.mapNotNull { it.toTagOrNull(categoryIds) }
+        val feeds = subscriptions.mapNotNull { obj ->
             val id = obj.stringOrNull("id") ?: return@mapNotNull null
-            val categoriesForFeed = obj["categories"]?.jsonArray.orEmpty()
-                .mapNotNull { it.jsonObject.stringOrNull("id") }
+            val categoriesForFeed = obj["categories"].asArray()
+                .mapNotNull { (it as? JsonObject)?.stringOrNull("id") }
                 .filter { it in categoryIds }
             FeedEntity(
                 id = id,
@@ -80,8 +85,8 @@ class FreshRssApi(
             )
         }
         val feedIds = feeds.map { it.id }.toSet()
-        val articles = itemsJson["items"]?.jsonArray.orEmpty().mapNotNull { value ->
-            value.jsonObject.toArticleOrNull(feedIds)
+        val articles = itemsJson["items"].asArray().mapNotNull { value ->
+            (value as? JsonObject)?.toArticleOrNull(feedIds)
         }
         return FreshRssSnapshot(feeds, categories, tags, articles)
     }
@@ -102,6 +107,30 @@ class FreshRssApi(
 
     suspend fun unsubscribe(feedId: String) {
         post("subscription/edit", mapOf("s" to feedId, "ac" to "unsubscribe"))
+    }
+
+    /**
+     * Subscription folders are represented as labels in the Google Reader API.
+     * The endpoint accepts one add/remove label per request, so apply only the
+     * difference to avoid removing categories maintained by another client.
+     */
+    suspend fun updateSubscriptionCategories(feedId: String, currentIds: Set<String>, selectedIds: Set<String>) {
+        requireLoggedIn()
+        val changes = subscriptionCategoryChanges(currentIds, selectedIds)
+        changes.remove.forEach { categoryId ->
+            post("subscription/edit", mapOf("s" to feedId, "ac" to "edit", "r" to categoryId))
+        }
+        changes.add.forEach { categoryId ->
+            post("subscription/edit", mapOf("s" to feedId, "ac" to "edit", "a" to categoryId))
+        }
+    }
+
+    suspend fun createCategoryAndAssign(feedId: String, label: String): String {
+        val name = label.trim()
+        require(name.isNotBlank()) { "Category name cannot be blank" }
+        val id = "user/$username/label/$name"
+        post("subscription/edit", mapOf("s" to feedId, "ac" to "edit", "a" to id))
+        return id
     }
 
     suspend fun createTag(label: String): String {
@@ -179,6 +208,7 @@ class FreshRssApi(
     private fun Map<String, JsonElement>.string(key: String, fallback: String = "") = stringOrNull(key) ?: fallback
     private fun Map<String, JsonElement>.stringOrNull(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
     private fun Map<String, JsonElement>.int(key: String): Int = stringOrNull(key)?.toIntOrNull() ?: 0
+    private fun JsonElement?.asArray(): JsonArray = this as? JsonArray ?: JsonArray(emptyList())
 
     private fun JsonObject.toCategoryOrNull(): CategoryEntity? {
         val id = stringOrNull("id") ?: return null
@@ -194,20 +224,22 @@ class FreshRssApi(
 
     private fun JsonObject.toArticleOrNull(feedIds: Set<String>): ArticleEntity? {
         val id = stringOrNull("id") ?: return null
-        val origin = this["origin"]?.jsonObject
+        val origin = this["origin"] as? JsonObject
         val feedId = origin?.stringOrNull("streamId")?.takeIf { it in feedIds }
             ?: stringOrNull("crawlTimeMsec")?.let { "feed/unknown" }
             ?: return null
-        val author = this["author"]?.jsonArray?.firstOrNull()?.jsonObject?.string("name") ?: ""
-        val summary = this["summary"]?.jsonObject?.stringOrNull("content")
-            ?: this["content"]?.jsonArray?.firstOrNull()?.jsonObject?.stringOrNull("content")
+        val author = (this["author"] as? JsonPrimitive)?.contentOrNull
+            ?: (this["author"] as? JsonObject)?.stringOrNull("name")
             ?: ""
-        val url = this["alternate"]?.jsonArray?.firstOrNull()?.jsonObject?.string("href")
+        val summary = (this["summary"] as? JsonObject)?.stringOrNull("content")
+            ?: (this["content"] as? JsonObject)?.stringOrNull("content")
+            ?: ""
+        val url = this["alternate"].asArray().firstOrNull()?.let { it as? JsonObject }?.string("href")
             ?: origin?.string("htmlUrl") ?: ""
         val timestamp = stringOrNull("crawlTimeMsec")?.toLongOrNull()
             ?: stringOrNull("timestampUsec")?.toLongOrNull()?.div(1000)
             ?: 0L
-        val labels = this["categories"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+        val labels = this["categories"].asArray().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         return ArticleEntity(
             id = id,
             feedId = feedId,

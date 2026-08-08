@@ -25,6 +25,13 @@ data class TagEntity(
     val title: String,
 )
 
+/** A device-only label used to organize feeds, independent of FreshRSS article tags. */
+@Entity(tableName = "local_feed_tags")
+data class LocalFeedTagEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+)
+
 @Entity(tableName = "articles")
 data class ArticleEntity(
     @PrimaryKey val id: String,
@@ -64,3 +71,11 @@ data class FolderCategoryCrossRef(
     val categoryId: String,
 )
 
+@Entity(
+    tableName = "feed_local_tags",
+    primaryKeys = ["feedId", "tagId"],
+)
+data class FeedLocalTagCrossRef(
+    val feedId: String,
+    val tagId: Long,
+)

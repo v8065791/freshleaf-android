@@ -48,6 +48,39 @@ interface TagDao {
 }
 
 @Dao
+interface LocalFeedTagDao {
+    @Query("SELECT * FROM local_feed_tags ORDER BY name COLLATE NOCASE")
+    fun observeAll(): Flow<List<LocalFeedTagEntity>>
+
+    @Insert
+    suspend fun insert(tag: LocalFeedTagEntity): Long
+
+    @Query("UPDATE local_feed_tags SET name = :name WHERE id = :id")
+    suspend fun rename(id: Long, name: String)
+
+    @Query("DELETE FROM local_feed_tags WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    @Query("SELECT tagId FROM feed_local_tags WHERE feedId = :feedId")
+    fun observeTagIdsForFeed(feedId: String): Flow<List<Long>>
+
+    @Query("SELECT feedId FROM feed_local_tags WHERE tagId = :tagId")
+    fun observeFeedIdsForTag(tagId: Long): Flow<List<String>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun addFeedTag(ref: FeedLocalTagCrossRef)
+
+    @Query("DELETE FROM feed_local_tags WHERE feedId = :feedId")
+    suspend fun clearFeedTags(feedId: String)
+
+    @Transaction
+    suspend fun replaceFeedTags(feedId: String, tagIds: List<Long>) {
+        clearFeedTags(feedId)
+        tagIds.distinct().forEach { addFeedTag(FeedLocalTagCrossRef(feedId, it)) }
+    }
+}
+
+@Dao
 interface ArticleDao {
     @Query("SELECT * FROM articles ORDER BY publishedAt DESC")
     fun observeAllCached(): Flow<List<ArticleEntity>>
@@ -56,12 +89,18 @@ interface ArticleDao {
         SELECT * FROM articles
         WHERE (:filter = 'all' OR (:filter = 'unread' AND isRead = 0) OR (:filter = 'starred' AND isStarred = 1))
           AND (:feedId IS NULL OR feedId = :feedId)
-          AND (:categoryId IS NULL OR feedId IN (SELECT id FROM feeds WHERE categoryIds LIKE '%' || :categoryId || '%'))
+          AND (:categoryId IS NULL OR feedId IN (
+              SELECT id FROM feeds WHERE categoryIds = :categoryId
+                OR categoryIds LIKE :categoryId || char(31) || '%'
+                OR categoryIds LIKE '%' || char(31) || :categoryId
+                OR categoryIds LIKE '%' || char(31) || :categoryId || char(31) || '%'
+          ))
           AND (:tagId IS NULL OR tagIds LIKE '%' || :tagId || '%')
+          AND (:localFeedTagId IS NULL OR feedId IN (SELECT feedId FROM feed_local_tags WHERE tagId = :localFeedTagId))
         ORDER BY publishedAt DESC
         """,
     )
-    fun observe(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null): Flow<List<ArticleEntity>>
+    fun observe(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null, localFeedTagId: Long? = null): Flow<List<ArticleEntity>>
 
     @Query("SELECT * FROM articles WHERE id = :id")
     fun observeOne(id: String): Flow<ArticleEntity?>
@@ -102,6 +141,9 @@ interface LocalFolderDao {
     @Query("SELECT feedId FROM folder_feeds WHERE folderId IN (:folderIds)")
     fun observeFeedIds(folderIds: List<Long>): Flow<List<String>>
 
+    @Query("SELECT folderId FROM folder_feeds WHERE feedId = :feedId")
+    fun observeFolderIdsForFeed(feedId: String): Flow<List<Long>>
+
     @Query("SELECT categoryId FROM folder_categories WHERE folderId = :folderId")
     fun observeCategoryIds(folderId: Long): Flow<List<String>>
 
@@ -110,6 +152,9 @@ interface LocalFolderDao {
 
     @Query("DELETE FROM folder_feeds WHERE folderId = :folderId")
     suspend fun clearFeeds(folderId: Long)
+
+    @Query("DELETE FROM folder_feeds WHERE feedId = :feedId")
+    suspend fun clearFoldersForFeed(feedId: String)
 
     @Query("DELETE FROM folder_categories WHERE folderId = :folderId")
     suspend fun clearCategories(folderId: Long)
@@ -120,5 +165,11 @@ interface LocalFolderDao {
         clearCategories(folderId)
         feedIds.forEach { addFeed(FolderFeedCrossRef(folderId, it)) }
         categoryIds.forEach { addCategory(FolderCategoryCrossRef(folderId, it)) }
+    }
+
+    @Transaction
+    suspend fun replaceFoldersForFeed(feedId: String, folderIds: List<Long>) {
+        clearFoldersForFeed(feedId)
+        folderIds.distinct().forEach { addFeed(FolderFeedCrossRef(it, feedId)) }
     }
 }
