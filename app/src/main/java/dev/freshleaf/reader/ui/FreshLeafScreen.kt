@@ -27,6 +27,8 @@ import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
@@ -68,6 +70,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import dev.freshleaf.reader.data.ArticleEntity
 import dev.freshleaf.reader.data.CategoryEntity
 import dev.freshleaf.reader.data.FeedEntity
+import dev.freshleaf.reader.data.FolderFeedCrossRef
 import dev.freshleaf.reader.data.LocalFolderEntity
 import dev.freshleaf.reader.data.LocalFeedTagEntity
 import dev.freshleaf.reader.data.ReaderPreferences
@@ -159,6 +163,7 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
     val tags by viewModel.tags.collectAsState()
     val localFeedTags by viewModel.localFeedTags.collectAsState()
     val folders by viewModel.folders.collectAsState()
+    val folderFeedAssignments by viewModel.folderFeedAssignments.collectAsState()
     val filter by viewModel.selectedFilter.collectAsState()
     val selectedFeedId by viewModel.selectedFeedId.collectAsState()
     val selectedCategoryId by viewModel.selectedCategoryId.collectAsState()
@@ -195,14 +200,20 @@ private fun ReaderScreen(viewModel: FreshLeafViewModel) {
                 Divider(Modifier.padding(vertical = 8.dp))
                 Text("Categories", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 categories.forEach { category -> DrawerAction(category.title, Icons.Default.Folder, category.id == selectedCategoryId) { viewModel.chooseCategory(category.id); scope.launch { drawerState.close() } } }
-                Text("Feeds", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-                feeds.forEach { feed -> FeedDrawerAction(feed, feed.id == selectedFeedId, onSelect = { viewModel.chooseFeed(feed.id); scope.launch { drawerState.close() } }, onEdit = { organizationFeed = feed; scope.launch { drawerState.close() } }) }
                 Text("Tags", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 tags.forEach { tag -> DrawerAction(tag.title, Icons.Default.Label, tag.id == selectedTagId) { viewModel.chooseTag(tag.id); scope.launch { drawerState.close() } } }
                 Text("Feed labels", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
                 localFeedTags.forEach { tag -> DrawerAction(tag.name, Icons.Default.Label, false) { viewModel.chooseLocalFeedTag(tag.id); scope.launch { drawerState.close() } } }
                 Text("Local folders", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-                FolderDrawerTree(folders) { folder -> viewModel.chooseFolder(folder.id); scope.launch { drawerState.close() } }
+                FolderDrawerTree(
+                    folders = folders,
+                    assignments = folderFeedAssignments,
+                    feeds = feeds,
+                    selectedFeedId = selectedFeedId,
+                    onFolderSelect = { folder -> viewModel.chooseFolder(folder.id); scope.launch { drawerState.close() } },
+                    onFeedSelect = { feed -> viewModel.chooseFeed(feed.id); scope.launch { drawerState.close() } },
+                    onFeedEdit = { feed -> organizationFeed = feed; scope.launch { drawerState.close() } },
+                )
                 Divider(Modifier.padding(vertical = 8.dp))
                 TextButton(onClick = { showFolderDialog = true }) { Icon(Icons.Default.CreateNewFolder, null); Text("New local folder", Modifier.padding(start = 8.dp)) }
                 TextButton(onClick = { showFeedDialog = true }) { Icon(Icons.Default.Add, null); Text("Subscribe to feed", Modifier.padding(start = 8.dp)) }
@@ -268,15 +279,96 @@ private fun FeedDrawerAction(feed: FeedEntity, selected: Boolean, onSelect: () -
 }
 
 @Composable
-private fun FolderDrawerTree(folders: List<LocalFolderEntity>, onOpen: (LocalFolderEntity) -> Unit) {
+private fun FolderDrawerTree(
+    folders: List<LocalFolderEntity>,
+    assignments: List<FolderFeedCrossRef>,
+    feeds: List<FeedEntity>,
+    selectedFeedId: String?,
+    onFolderSelect: (LocalFolderEntity) -> Unit,
+    onFeedSelect: (FeedEntity) -> Unit,
+    onFeedEdit: (FeedEntity) -> Unit,
+) {
+    val folderIds = folders.mapTo(mutableSetOf()) { it.id }
+    val feedsById = feeds.associateBy { it.id }
+    val feedsByFolder = assignments
+        .filter { it.folderId in folderIds }
+        .groupBy { it.folderId }
+        .mapValues { (_, refs) -> refs.mapNotNull { feedsById[it.feedId] }.sortedBy { it.title.lowercase() } }
+    val assignedFeedIds = assignments.filter { it.folderId in folderIds }.mapTo(mutableSetOf()) { it.feedId }
+
     @Composable
     fun draw(parentId: Long?, depth: Int) {
         folders.filter { it.parentId == parentId }.forEach { folder ->
-            DrawerAction("${"  ".repeat(depth)}${folder.name}", if (folder.parentId == null) Icons.Default.Folder else Icons.Default.FolderOpen, false) { onOpen(folder) }
+            FolderDrawerGroup(
+                name = folder.name,
+                stateKey = "folder-${folder.id}",
+                feeds = feedsByFolder[folder.id].orEmpty(),
+                selectedFeedId = selectedFeedId,
+                depth = depth,
+                onFolderSelect = { onFolderSelect(folder) },
+                onFeedSelect = onFeedSelect,
+                onFeedEdit = onFeedEdit,
+            )
             draw(folder.id, depth + 1)
         }
     }
     draw(null, 0)
+    val unknownFeeds = feeds.filter { it.id !in assignedFeedIds }.sortedBy { it.title.lowercase() }
+    if (unknownFeeds.isNotEmpty()) {
+        FolderDrawerGroup(
+            name = "Unknown",
+            stateKey = "unknown",
+            feeds = unknownFeeds,
+            selectedFeedId = selectedFeedId,
+            depth = 0,
+            onFolderSelect = null,
+            onFeedSelect = onFeedSelect,
+            onFeedEdit = onFeedEdit,
+        )
+    }
+}
+
+@Composable
+private fun FolderDrawerGroup(
+    name: String,
+    stateKey: String,
+    feeds: List<FeedEntity>,
+    selectedFeedId: String?,
+    depth: Int,
+    onFolderSelect: (() -> Unit)?,
+    onFeedSelect: (FeedEntity) -> Unit,
+    onFeedEdit: (FeedEntity) -> Unit,
+) {
+    var expanded by rememberSaveable(stateKey) { mutableStateOf(false) }
+    Column {
+        Surface(
+            color = Color.Transparent,
+            shape = MaterialTheme.shapes.extraLarge,
+            modifier = Modifier.fillMaxWidth().padding(start = (12 + depth * 16).dp, top = 2.dp, end = 12.dp, bottom = 2.dp)
+                .combinedClickable(onClick = { onFolderSelect?.invoke() ?: run { expanded = !expanded } }),
+        ) {
+            Row(Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (expanded) Icons.Default.FolderOpen else Icons.Default.Folder, null)
+                Spacer(Modifier.width(16.dp))
+                Text(name, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(if (expanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight, if (expanded) "Collapse $name" else "Expand $name")
+                }
+            }
+        }
+        if (expanded) {
+            feeds.forEach { feed ->
+                Row(Modifier.padding(start = (16 + depth * 16).dp)) {
+                    FeedDrawerAction(
+                        feed = feed,
+                        selected = feed.id == selectedFeedId,
+                        onSelect = { onFeedSelect(feed) },
+                        onEdit = { onFeedEdit(feed) },
+                    )
+                }
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -292,7 +384,6 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
     var resetConfirmation by remember { mutableStateOf(false) }
     var parentForNewFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
     var sourceFolder by remember { mutableStateOf<LocalFolderEntity?>(null) }
-    var organizationFeed by remember { mutableStateOf<FeedEntity?>(null) }
     var creatingLocalTag by remember { mutableStateOf(false) }
     var editingLocalTag by remember { mutableStateOf<LocalFeedTagEntity?>(null) }
     var editingSwipeStart by remember { mutableStateOf<Boolean?>(null) }
@@ -352,12 +443,6 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
                 localFeedTags.forEach { tag ->
                     TextButton(onClick = { editingLocalTag = tag }, modifier = Modifier.fillMaxWidth()) { Text(tag.name) }
                 }
-                Divider(Modifier.padding(vertical = 12.dp))
-                Text("Feeds", style = MaterialTheme.typography.titleMedium)
-                Text("Choose a feed to assign FreshRSS categories, local labels, and local folders.", style = MaterialTheme.typography.bodySmall)
-                feeds.forEach { feed ->
-                    TextButton(onClick = { organizationFeed = feed }, modifier = Modifier.fillMaxWidth()) { Text(feed.title) }
-                }
             }
         }
     }
@@ -375,7 +460,6 @@ private fun SettingsScreen(viewModel: FreshLeafViewModel, onBack: () -> Unit) {
         parentForNewFolder = null
     }
     sourceFolder?.let { folder -> FolderSourcesDialog(folder, feeds, categories, viewModel, { sourceFolder = null }) }
-    organizationFeed?.let { feed -> FeedOrganizationDialog(feed, categories, localFeedTags, folders, viewModel, { organizationFeed = null }) }
     if (creatingLocalTag) NameDialog("New local feed label", "Label name", { creatingLocalTag = false }, { name -> viewModel.createLocalFeedTag(name); creatingLocalTag = false })
     editingLocalTag?.let { tag -> LocalFeedTagDialog(tag, viewModel, { editingLocalTag = null }) }
     editingSwipeStart?.let { start -> SwipeActionDialog(

@@ -147,6 +147,9 @@ interface LocalFolderDao {
     @Query("SELECT feedId FROM folder_feeds WHERE folderId IN (:folderIds)")
     fun observeFeedIds(folderIds: List<Long>): Flow<List<String>>
 
+    @Query("SELECT * FROM folder_feeds")
+    fun observeAllFeedAssignments(): Flow<List<FolderFeedCrossRef>>
+
     @Query("SELECT folderId FROM folder_feeds WHERE feedId = :feedId")
     fun observeFolderIdsForFeed(feedId: String): Flow<List<Long>>
 

@@ -45,6 +45,7 @@ class FreshLeafViewModel(
     val tags = repository.tags.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val localFeedTags = repository.localFeedTags.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val folders = repository.folders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val folderFeedAssignments = repository.folderFeedAssignments.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val selectedFilter: StateFlow<String> = filter
     val selectedFeedId: StateFlow<String?> = feedId
     val selectedCategoryId: StateFlow<String?> = categoryId

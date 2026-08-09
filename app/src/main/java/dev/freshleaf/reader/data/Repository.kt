@@ -25,6 +25,7 @@ class FreshLeafRepository(
     val tags = database.tags().observeAll()
     val localFeedTags = database.localFeedTags().observeAll()
     val folders = database.folders().observeAll()
+    val folderFeedAssignments = database.folders().observeAllFeedAssignments()
 
     fun articles(filter: String, feedId: String? = null, categoryId: String? = null, tagId: String? = null, localFeedTagId: Long? = null): Flow<List<ArticleEntity>> =
         database.articles().observe(filter, feedId, categoryId, tagId, localFeedTagId)
