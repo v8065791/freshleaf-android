@@ -109,6 +109,11 @@ class FreshRssApi(
         post("subscription/edit", mapOf("s" to feedId, "ac" to "unsubscribe"))
     }
 
+    suspend fun updateSubscriptionTitle(feedId: String, title: String) {
+        require(title.isNotBlank()) { "Feed title cannot be blank" }
+        post("subscription/edit", mapOf("s" to feedId, "ac" to "edit", "t" to title.trim()))
+    }
+
     /**
      * Subscription folders are represented as labels in the Google Reader API.
      * The endpoint accepts one add/remove label per request, so apply only the

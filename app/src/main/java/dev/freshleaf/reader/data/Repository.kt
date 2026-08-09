@@ -109,21 +109,24 @@ class FreshLeafRepository(
 
     suspend fun saveFeedOrganization(
         feed: FeedEntity,
+        title: String,
         categoryIds: List<String>,
         localTagIds: List<Long>,
         folderIds: List<Long>,
     ) {
         val currentCategories = remoteIds(feed.categoryIds)
         val selectedCategories = categoryIds.toSet()
-        if (currentCategories != selectedCategories) {
+        val titleChanged = title.trim() != feed.title
+        if (currentCategories != selectedCategories || titleChanged) {
             api.loginFromStored(credentials)
+            if (titleChanged) api.updateSubscriptionTitle(feed.id, title)
             api.updateSubscriptionCategories(feed.id, currentCategories, selectedCategories)
             // Keep the local selection accurate even if a subsequent full sync is unavailable.
-            database.feeds().upsertAll(listOf(feed.copy(categoryIds = selectedCategories.sorted().joinToString(REMOTE_ID_SEPARATOR))))
+            database.feeds().upsertAll(listOf(feed.copy(title = title.trim(), categoryIds = selectedCategories.sorted().joinToString(REMOTE_ID_SEPARATOR))))
         }
         database.localFeedTags().replaceFeedTags(feed.id, localTagIds)
         database.folders().replaceFoldersForFeed(feed.id, folderIds)
-        if (currentCategories != selectedCategories) sync()
+        if (currentCategories != selectedCategories || titleChanged) sync()
     }
 
     suspend fun createCategoryForFeed(feed: FeedEntity, label: String) {
@@ -160,6 +163,13 @@ class FreshLeafRepository(
         api.loginFromStored(credentials)
         api.createTag(label)
         sync()
+    }
+
+    suspend fun unsubscribe(feed: FeedEntity) {
+        api.loginFromStored(credentials)
+        api.unsubscribe(feed.id)
+        database.feeds().delete(feed.id)
+        database.articles().deleteForFeed(feed.id)
     }
 
     suspend fun clearAccount() = withContext(Dispatchers.IO) {

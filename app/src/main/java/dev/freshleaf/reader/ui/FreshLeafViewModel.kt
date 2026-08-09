@@ -8,6 +8,10 @@ import dev.freshleaf.reader.data.FreshLeafRepository
 import dev.freshleaf.reader.data.FolderSources
 import dev.freshleaf.reader.data.FeedEntity
 import dev.freshleaf.reader.data.LocalFolderEntity
+import dev.freshleaf.reader.data.ReaderPreferences
+import dev.freshleaf.reader.data.RowSwipeAction
+import dev.freshleaf.reader.data.ThemeMode
+import dev.freshleaf.reader.data.UserPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +20,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewModel() {
+class FreshLeafViewModel(
+    private val repository: FreshLeafRepository,
+    private val userPreferences: UserPreferences,
+) : ViewModel() {
     private val filter = MutableStateFlow("all")
     private val feedId = MutableStateFlow<String?>(null)
     private val categoryId = MutableStateFlow<String?>(null)
@@ -40,6 +47,9 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
     val folders = repository.folders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val selectedFilter: StateFlow<String> = filter
     val selectedFeedId: StateFlow<String?> = feedId
+    val selectedCategoryId: StateFlow<String?> = categoryId
+    val selectedTagId: StateFlow<String?> = tagId
+    val preferences: StateFlow<ReaderPreferences> = userPreferences.state
     val articles = combine(filter, feedId, categoryId, tagId, localFeedTagId) { currentFilter, currentFeed, currentCategory, currentTag, currentLocalFeedTag ->
         BasicArticleSelection(currentFilter, currentFeed, currentCategory, currentTag, currentLocalFeedTag)
     }.combine(folderId) { selection, currentFolder ->
@@ -138,12 +148,17 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
 
     fun toggleRead(article: ArticleEntity) = launchOperation { repository.setRead(article) }
     fun toggleStar(article: ArticleEntity) = launchOperation { repository.setStarred(article) }
+    fun applySwipe(article: ArticleEntity, action: RowSwipeAction) = when (action) {
+        RowSwipeAction.MARK_READ -> if (!article.isRead) launchOperation { repository.markRead(article, true) } else Unit
+        RowSwipeAction.TOGGLE_STAR -> toggleStar(article)
+        RowSwipeAction.DISABLED -> Unit
+    }
     fun createFolder(name: String, parentId: Long? = null) = launchOperation { repository.createFolder(name, parentId) }
     fun folderSources(folderId: Long) = repository.folderSources(folderId)
     fun replaceFolderSources(folderId: Long, sources: FolderSources) = launchOperation { repository.replaceFolderSources(folderId, sources.feedIds, sources.categoryIds) }
     fun feedOrganization(feedId: String) = repository.feedOrganization(feedId)
-    fun saveFeedOrganization(feed: FeedEntity, categoryIds: List<String>, localTagIds: List<Long>, folderIds: List<Long>) = launchOperation {
-        repository.saveFeedOrganization(feed, categoryIds, localTagIds, folderIds)
+    fun saveFeedOrganization(feed: FeedEntity, title: String, categoryIds: List<String>, localTagIds: List<Long>, folderIds: List<Long>) = launchOperation {
+        repository.saveFeedOrganization(feed, title, categoryIds, localTagIds, folderIds)
     }
     fun createCategoryForFeed(feed: FeedEntity, name: String) = launchOperation { repository.createCategoryForFeed(feed, name) }
     fun createLocalFeedTag(name: String) = launchOperation { repository.createLocalFeedTag(name) }
@@ -157,6 +172,10 @@ class FreshLeafViewModel(private val repository: FreshLeafRepository) : ViewMode
     }
     fun addFeed(url: String, title: String, categoryId: String?) = launchOperation { repository.subscribe(url, title, categoryId) }
     fun createTag(label: String) = launchOperation { repository.createRemoteTag(label) }
+    fun unsubscribe(feed: FeedEntity) = launchOperation { repository.unsubscribe(feed) }
+    fun setThemeMode(value: ThemeMode) = userPreferences.setThemeMode(value)
+    fun setSwipeStart(value: RowSwipeAction) = userPreferences.setSwipeStart(value)
+    fun setSwipeEnd(value: RowSwipeAction) = userPreferences.setSwipeEnd(value)
 
     fun clearError() { _operationError.value = null }
 
@@ -198,7 +217,10 @@ internal fun descendantFolderIds(rootId: Long, folders: List<LocalFolderEntity>)
     return result
 }
 
-class FreshLeafViewModelFactory(private val repository: FreshLeafRepository) : ViewModelProvider.Factory {
+class FreshLeafViewModelFactory(
+    private val repository: FreshLeafRepository,
+    private val userPreferences: UserPreferences,
+) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T = FreshLeafViewModel(repository) as T
+    override fun <T : ViewModel> create(modelClass: Class<T>): T = FreshLeafViewModel(repository, userPreferences) as T
 }

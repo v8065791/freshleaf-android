@@ -21,6 +21,9 @@ interface FeedDao {
 
     @Query("DELETE FROM feeds WHERE id NOT IN (:ids)")
     suspend fun deleteMissing(ids: List<String>)
+
+    @Query("DELETE FROM feeds WHERE id = :id")
+    suspend fun delete(id: String)
 }
 
 @Dao
@@ -116,6 +119,9 @@ interface ArticleDao {
 
     @Query("UPDATE articles SET isStarred = :starred WHERE id = :id")
     suspend fun setStarred(id: String, starred: Boolean)
+
+    @Query("DELETE FROM articles WHERE feedId = :feedId")
+    suspend fun deleteForFeed(feedId: String)
 }
 
 @Dao
